@@ -1,7 +1,7 @@
 #!/usr/bin/python
 
 '''
-        MNet Suite
+        natlas
         config.py
 
         Michael Laforest
@@ -25,8 +25,9 @@
 '''
 
 import json
+import sys
 
-class mnet_config_diagram:
+class natlas_config_diagram:
     node_text_size      = 8
     link_text_size      = 7
     title_text_size     = 15
@@ -53,7 +54,7 @@ class mnet_config_diagram:
                             '<%loopback {lo.name} - {lo.ip}<br />%>' \
                             '<%svi VLAN {svi.vlan} - {svi.ip}<br />%>'
 
-class mnet_discover_acl:
+class natlas_discover_acl:
     '''
     Define an ACL entry for the 'discover' config block.
     Defined in the form:
@@ -63,8 +64,8 @@ class mnet_discover_acl:
         <type>   = ip, host
         <str>    = string
     '''
-    all_actions = [ ";", "permit", "deny", "leaf", "include" ]
-    all_types   = [ ";", "ip", "host" ]
+    all_actions = [ ';', 'permit', 'deny', 'leaf', 'include' ]
+    all_types   = [ ';', 'ip', 'host', 'software', 'platform', 'serial' ]
 
     def __init__(self, str):
         self.action     = "nop"
@@ -87,12 +88,12 @@ class mnet_discover_acl:
     def __repr__(self):
         return '<%s %s %s>' % (self.action, self.type, self.str)
 
-class mnet_config:
+class natlas_config:
     def __init__(self):
         self.host_domains       = []
         self.snmp_creds         = []
         self.discover_acl       = []
-        self.diagram            = mnet_config_diagram()
+        self.diagram            = natlas_config_diagram()
 
     def load(self, filename):
         # load config
@@ -106,7 +107,7 @@ class mnet_config:
         # parse 'discover' block ACL entries
         for acl in json_data['discover']:
             try:
-                entry = mnet_discover_acl(acl)
+                entry = natlas_discover_acl(acl)
             except Exception as e:
                 print(e)
                 return 0
@@ -130,13 +131,10 @@ class mnet_config:
 
     def __load_json_conf(self, json_file):
         json_data = None
-
-        try:
-            json_data = json.loads(open(json_file).read())
-        except:
-            print('Invalid JSON file or file not found.')
-            return None
-
+        fd = open(json_file)
+        json_data = fd.read()
+        fd.close()
+        json_data = json.loads(json_data)
         return json_data
 
     def generate_new(self):
@@ -166,4 +164,140 @@ class mnet_config:
                         '               "group_vpc" : 0\n' \
                         '       }\n' \
                         '}'
+
+
+    def validate_config(self, filename):
+        print('Validating config...')
+        json_data = self.__load_json_conf(filename)
+        if (json_data == None):
+            print('Could not load config.')
+            return 0
+
+        ret = 0
+
+        ret += self.__validate_config_snmp(json_data)
+        ret += self.__validate_config_domains(json_data)
+        ret += self.__validate_config_discover(json_data)
+        ret += self.__validate_config_diagram(json_data)
+            
+        if (ret < 4):
+            print('FAILED')
+        else:
+            print('PASSED')
+
+    def __validate_config_snmp(self, data):
+        sys.stdout.write('Checking snmp...')
+        obj = None
+        try:
+            obj = data['snmp']
+        except:
+            print('does not exist')
+            return 0
+
+        if (type(obj) != list):
+            print('not a list')
+            return 0
+
+        for cred in obj:
+            if (type(cred) != dict):
+                print('list contains a non-dict (%s)' % type(cred))
+                return 0
+            try:
+                c = cred['community']
+                if (type(c) != str):
+                    print('community is not a string')
+                    return 0
+            except KeyError as e:
+                print('one or more entries does not include %s' % e)
+                return 0
+            try:
+                c = cred['ver']
+                if (type(c) != int):
+                    print('version is not an int')
+                    return 0
+                else:
+                    if (c != 2):
+                        print('version for \'%s\' is not supported' % cred['community'])
+                        return 0
+            except KeyError as e:
+                print('one or more entries does not include %s' % e)
+                return 0
+        print('ok')
+        return 1
+
+    def __validate_config_domains(self, data):
+        sys.stdout.write('Checking domains...')
+        obj = None
+        try:
+            obj = data['domains']
+        except:
+            print('does not exist')
+            return 0
+        if (type(obj) != list):
+            print('not a list')
+            return 0
+        for d in obj:
+            if (type(d) != str):
+                print('domain is not a string')
+                return 0
+        print('ok')
+        return 1
+
+    def __validate_config_discover(self, data):
+        sys.stdout.write('Checking discover...')
+        obj = None
+        try:
+            obj = data['discover']
+        except:
+            print('does not exist')
+            return 0
+        if (type(obj) != list):
+            print('not a list')
+            return 0
+        for d in obj:
+            if (type(d) != str):
+                print('ACL is not a string')
+                return 0
+
+            ace = d.split(' ')
+            if (len(ace) < 3):
+                print('ACE not enough params \'%s\'' % d)
+                return 0
+            if (ace[0] not in natlas_discover_acl.all_actions):
+                print('ACE op \'%s\' not valid' % ace[0])
+                return 0
+            if (ace[1] not in natlas_discover_acl.all_types):
+                print('ACE cond \'%s\' not valid' % ace[1])
+                return 0
+
+        print('ok')
+        return 1
+
+    def __validate_config_diagram(self, data):
+        sys.stdout.write('Checking diagram...')
+        obj = None
+        try:
+            obj = data['diagram']
+        except:
+            print('does not exist')
+            return 0
+        if (type(obj) != dict):
+            print('not a dict')
+            return 0
+
+        for nv in obj:
+            if (nv not in ['node_text_size',
+                            'link_text_size',
+                            'title_text_size',
+                            'get_stack_members',
+                            'get_vss_members',
+                            'expand_stackwise',
+                            'expand_vss',
+                            'expand_lag',
+                            'group_vpc']):
+                print('invalid value \'%s\'' % nv)
+                return 0
+
+        print('ok')
+        return 1
 
